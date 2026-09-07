@@ -63,7 +63,7 @@ jobs:
 
       - name: Disable Build default value
         run: |
-          sed -i 'POST_DEFCONFIG_CMDS="check_defconfig' build.config.gki
+          sed -e 'POST_DEFCONFIG_CMDS="check_defconfig' build.config.gki
           echo "#POST_DEFCONFIG_CMDS="check_defconfig" >> build.config.gki
 
       - name: Build kernel
