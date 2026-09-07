@@ -26,7 +26,6 @@ jobs:
         with:
           node-version: '20'
           # Optional : Enables automatic package caching
-          cache: 'npm'
           
       - name: Setup repo tool
         run: |
