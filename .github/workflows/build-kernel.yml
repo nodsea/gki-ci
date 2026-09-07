@@ -8,12 +8,26 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     steps:
-      - name: Free up disk space
+      - name: Maximize build space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/share/swift /usr/local/share/boost \
+            /usr/local/graalvm /usr/local/share/powershell \
+            /usr/local/share/chromium /usr/local/lib/node_modules
+          sudo docker image prune --all --force 2>/dev/null || true
           sudo apt-get clean
-          df -h
+          df -h /
 
+      - name: Setup swap
+        run: |
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile /mnt/swapfile 2>/dev/null || true
+          sudo fallocate -l 8G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+      
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -68,7 +82,7 @@ jobs:
       - name: Build kernel
         run: |
           cd ~/gki
-          SKIP_ABI_CHECKS=1 BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
+          SKIP_ABI_CHECKS=1 LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
 
       - name: Show hook detection summary
         if: always()
