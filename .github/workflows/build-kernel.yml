@@ -61,6 +61,11 @@ jobs:
           rm -f ~/gki/common/android/abi_gki_protected_exports_aarch64
           rm -f ~/gki/common/android/abi_gki_protected_exports_x86_64
 
+      - name: Disable Build default value
+        run: |
+          sed -i 'POST_DEFCONFIG_CMDS="check_defconfig' build.config.gki
+          echo "#POST_DEFCONFIG_CMDS="check_defconfig" >> build.config.gki
+
       - name: Build kernel
         run: |
           cd ~/gki
