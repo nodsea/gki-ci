@@ -1,0 +1,132 @@
+name: Build GKI android12-5.10 + KSU + SUSFS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/share/swift /usr/local/share/boost \
+            /usr/local/graalvm /usr/local/share/powershell \
+            /usr/local/share/chromium /usr/local/lib/node_modules
+          sudo docker image prune --all --force 2>/dev/null || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Setup swap
+        run: |
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile /mnt/swapfile 2>/dev/null || true
+          sudo fallocate -l 8G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl build-essential bc bison flex \
+              libssl-dev libelf-dev python3 python3-pip \
+              device-tree-compiler clang lld llvm
+
+      - name: Setup repo tool
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI Builder"
+
+      - name: Sync kernel source from scratch
+        run: |
+          mkdir -p ~/gki && cd ~/gki
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android12-5.10-lts --depth=1
+          repo sync -j$(nproc) -c --no-tags
+
+      - name: Integrate KSU
+        run: |
+          cd ~/gki/common
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          ls KernelSU/
+
+      - name: Integrate SUSFS4KSU
+        run: |
+          cd ~/gki
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-5.10 susfs4ksu
+
+          cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch common/KernelSU/
+          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch common/
+          cp susfs4ksu/kernel_patches/fs/* common/fs/
+          cp susfs4ksu/kernel_patches/include/linux/* common/include/linux/
+
+          cd common/KernelSU
+          patch -p1 < 10_enable_susfs_for_ksu.patch
+
+          cd ../
+          patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch
+
+      - name: Enable kernel config
+        run: |
+          cat >> ~/gki/common/arch/arm64/configs/gki_defconfig << 'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_LOCALVERSION="localhost-nodsea"
+          CONFIG_LOCALVERSION_AUTO=n
+          EOF
+          rm -f ~/gki/common/android/abi_gki_protected_exports_aarch64
+          rm -f ~/gki/common/android/abi_gki_protected_exports_x86_64
+
+      - name: Disable Build default value
+        run: |
+          sed -i 's/POST_DEFCONFIG_CMDS="check_defconfig"/#POST_DEFCONFIG_CMDS="check_defconfig"/g' ~/gki/common/build.config.gki
+
+      - name: Build kernel
+        run: |
+          cd ~/gki
+          SKIP_ABI_CHECKS=1 LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
+
+      - name: Show hook detection summary
+        if: always()
+        run: |
+          grep -i "kernelsu\|susfs\|hook\|lost\|incompatible" ~/gki/build.log | head -60 || true
+
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: ~/gki/build.log
+          retention-days: 7
+
+      - name: Upload kernel image
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: kernel-image-android12-5.10-ksu-susfs
+          path: |
+            ~/gki/out/android12-5.10/dist/Image
+            ~/gki/out/android12-5.10/dist/Image.gz
+          retention-days: 14
