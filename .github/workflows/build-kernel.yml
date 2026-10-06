@@ -146,3 +146,90 @@ jobs:
             ~/gki/out/android12-5.10/dist/Image
             ~/gki/out/android12-5.10/dist/Image.gz
           retention-days: 14
+      # ===================== BUNDLING ANYKERNEL3 =====================
+
+      - name: Clone AnyKernel3 template
+        if: success()
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ~/AnyKernel3
+          rm -rf ~/AnyKernel3/.git
+
+      - name: Configure anykernel.sh
+        if: success()
+        run: |
+          cd ~/AnyKernel3
+          cat > anykernel.sh << EOF
+          properties() { '
+          kernel.string=BakaSU android12-5.10 (${kernel_version})
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=X6833B
+          supported.versions=
+          supported.patchlevels=
+          '; }
+
+          BLOCK=boot;
+          IS_SLOT_DEVICE=1;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh
+          EOF
+
+      - name: Copy kernel image into AnyKernel3
+        if: success()
+        run: |
+          cp ~/gki/out/android12-5.10/dist/Image.gz ~/AnyKernel3/Image.gz 2>/dev/null || \
+          cp ~/gki/out/android12-5.10/dist/Image ~/AnyKernel3/Image
+
+      - name: Package AnyKernel3 zip
+        if: success()
+        id: package
+        run: |
+          cd ~/AnyKernel3
+          ZIPNAME="BakaSU-android12-5.10-X6833B-$(date +%Y%m%d-%H%M).zip"
+          zip -r9 "$ZIPNAME" . -x ".git*"
+          echo "zip_path=$HOME/AnyKernel3/$ZIPNAME" >> $GITHUB_OUTPUT
+          echo "zip_name=$ZIPNAME" >> $GITHUB_OUTPUT
+
+      - name: Upload AnyKernel3 zip as artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ${{ steps.package.outputs.zip_name }}
+          path: ${{ steps.package.outputs.zip_path }}
+          retention-days: 14
+
+      # ===================== UPLOAD KE TELEGRAM =====================
+
+      - name: Upload to Telegram
+        if: success()
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          CAPTION="Build berhasil
+          Kernel: android12-5.10 (${kernel_version})
+          Root: BakaSU (Tracepoint hook)
+          Device: X6833B
+          Commit: $(cd ~/gki/common && git rev-parse --short HEAD)
+          Tanggal: $(date '+%Y-%m-%d %H:%M UTC')"
+
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+            -F chat_id="${CHAT_ID}" \
+            -F document=@"${{ steps.package.outputs.zip_path }}" \
+            -F caption="${CAPTION}"
+
+      - name: Notify Telegram on failure
+        if: failure()
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d text="Build GAGAL — cek log di GitHub Actions: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
