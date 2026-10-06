@@ -1,4 +1,4 @@
-name: Build GKI android12-5.10 + KSU
+name: Build GKI android12-5.10 + BakaSU
 
 on:
   workflow_dispatch:
@@ -59,19 +59,27 @@ jobs:
           echo "=== Branch & HEAD commit ==="
           git rev-parse --abbrev-ref HEAD
           git log -1 --format="%H %ad %s" --date=short
-          echo "=== Kernel version string ==="
-          make kernelversion 2>/dev/null || cat Makefile | grep -m1 "^VERSION\|^PATCHLEVEL\|^SUBLEVEL"
 
-      - name: Integrate KSU
+      - name: Integrate BakaSU
         run: |
           cd ~/gki/common
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -
           ls KernelSU/
+
+      - name: Show BakaSU hook/config requirements
+        run: |
+          cd ~/gki/common
+          echo "=== Hook check files (jika ada) ==="
+          find KernelSU -iname "*check*.mk" -exec echo "--- {} ---" \; -exec cat {} \; || true
+          echo "=== Kconfig entries terkait KSU/TRACEPOINT/HOOK ==="
+          find KernelSU -iname "Kconfig" -exec grep -n "^config KSU\|TRACEPOINT\|AUTO_HOOK\|HOOK" {} \; || true
 
       - name: Enable kernel config
         run: |
           cat >> ~/gki/common/arch/arm64/configs/gki_defconfig << 'EOF'
           CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
           CONFIG_LOCALVERSION="localhost-nodsea"
           CONFIG_LOCALVERSION_AUTO=n
           EOF
@@ -82,15 +90,44 @@ jobs:
         run: |
           sed -i 's/POST_DEFCONFIG_CMDS="check_defconfig"/#POST_DEFCONFIG_CMDS="check_defconfig"/g' ~/gki/common/build.config.gki
 
+      - name: Normalize defconfig
+        run: |
+          cd ~/gki/common
+          make LLVM=1 LLVM_IAS=1 ARCH=arm64 O=out gki_defconfig
+          make LLVM=1 LLVM_IAS=1 ARCH=arm64 O=out savedefconfig
+          cp out/defconfig arch/arm64/configs/gki_defconfig
+          rm -rf out
+
+      - name: Verify kernel version before build
+        run: |
+          cd ~/gki/common
+          VERSION=$(grep -m1 "^VERSION = " Makefile | awk '{print $3}')
+          PATCHLEVEL=$(grep -m1 "^PATCHLEVEL = " Makefile | awk '{print $3}')
+          SUBLEVEL=$(grep -m1 "^SUBLEVEL = " Makefile | awk '{print $3}')
+          EXTRAVERSION=$(grep -m1 "^EXTRAVERSION = " Makefile | awk '{print $3}')
+          FULL_VERSION="${VERSION}.${PATCHLEVEL}.${SUBLEVEL}${EXTRAVERSION}"
+          echo "Kernel version yang akan di-compile: $FULL_VERSION"
+          echo "kernel_version=$FULL_VERSION" >> $GITHUB_ENV
+
+          if [ -z "$VERSION" ] || [ -z "$PATCHLEVEL" ] || [ -z "$SUBLEVEL" ]; then
+            echo "::error::Gagal membaca versi kernel dari Makefile — source kemungkinan tidak lengkap/corrupt."
+            exit 1
+          fi
+
+          if [ "$PATCHLEVEL" != "10" ]; then
+            echo "::warning::PATCHLEVEL terbaca $PATCHLEVEL, bukan 10 — pastikan branch yang di-sync memang android12-5.10-lts."
+          fi
+
       - name: Build kernel
         run: |
           cd ~/gki
+          echo "Building kernel version: $kernel_version"
           SKIP_ABI_CHECKS=1 LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
 
       - name: Show hook detection summary
         if: always()
         run: |
-          grep -i "kernelsu\|hook\|lost\|incompatible" ~/gki/build.log | head -40 || true
+          grep -i "bakasu\|kernelsu\|tracepoint\|hook\|lost\|incompatible" ~/gki/build.log | head -60 || true
 
       - name: Upload build log
         uses: actions/upload-artifact@v4
@@ -104,7 +141,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: kernel-image-android12-5.10-ksu
+          name: kernel-image-android12-5.10-bakasu
           path: |
             ~/gki/out/android12-5.10/dist/Image
             ~/gki/out/android12-5.10/dist/Image.gz
