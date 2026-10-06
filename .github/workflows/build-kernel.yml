@@ -143,7 +143,7 @@ jobs:
         with:
           name: kernel-image-android12-5.10-bakasu
           path: |
-            ~/gki/out/android12-5.10/common/arch/arm64/boot/Image.lz4
+            ~/gki/out/android12-5.10/common/arch/arm64/boot/Image
           retention-days: 14
       # ===================== BUNDLING ANYKERNEL3 =====================
       - name: Clone AnyKernel3 template
@@ -218,7 +218,7 @@ jobs:
       - name: Copy kernel image into AnyKernel3
         if: success()
         run: |
-          cp ~/gki/out/android12-5.10/common/arch/arm64/boot/Image.lz4 ~/AnyKernel3/Image.lz4
+          cp ~/gki/out/android12-5.10/common/arch/arm64/boot/Image ~/AnyKernel3/Image
 
       - name: Package AnyKernel3 zip
         if: success()
@@ -246,12 +246,12 @@ jobs:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          CAPTION="Hmm, look fine
+          CAPTION="DONE!!!(/≧▽≦)/
           Kernel: android12-5.10 (${kernel_version})
           Root: BakaSU (Tracepoint hook)
           Device: GKI5.10
           Commit: $(cd ~/gki/common && git rev-parse --short HEAD)
-          Tanggal: $(date '+%Y-%m-%d %H:%M UTC')"
+          Date: $(date '+%Y-%m-%d %H:%M UTC')"
 
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
             -F chat_id="${CHAT_ID}" \
