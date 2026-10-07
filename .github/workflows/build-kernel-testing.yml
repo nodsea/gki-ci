@@ -1,0 +1,232 @@
+name: GKI 5.10 Compeller w/KernelSU
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Cleaning some storage
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/share/swift /usr/local/share/boost \
+            /usr/local/graalvm /usr/local/share/powershell \
+            /usr/local/share/chromium /usr/local/lib/node_modules
+          sudo docker image prune --all --force 2>/dev/null || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Making swap
+        run: |
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile /mnt/swapfile 2>/dev/null || true
+          sudo fallocate -l 8G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Prep some dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl build-essential bc bison flex \
+              libssl-dev libelf-dev python3 python3-pip \
+              device-tree-compiler clang lld llvm
+
+      - name: Setup repo
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Configure git id
+        run: |
+          git config --global user.email "local@host"
+          git config --global user.name "localhost"
+
+      - name: Sync GKI
+        run: |
+          mkdir -p ~/gki && cd ~/gki
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android12-5.10-lts --depth=1
+          repo sync -j$(nproc) -c --no-tags --force-sync --optimized-fetch
+
+      - name: Showing ver.
+        run: |
+          cd ~/gki/common
+          echo "=== Branch & HEAD commit ==="
+          git rev-parse --abbrev-ref HEAD
+          git log -1 --format="%H %ad %s" --date=short
+
+      - name: Integrate KernelSU
+        run: |
+          cd ~/gki/common
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          ls KernelSU/
+
+      - name: Enable Kconfig
+        run: |
+          cat >> ~/gki/common/arch/arm64/configs/gki_defconfig << 'EOF'
+          CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_LOCALVERSION="localhost-nodsea"
+          CONFIG_LOCALVERSION_AUTO=n
+          EOF
+          rm -f ~/gki/common/android/abi_gki_protected_exports_aarch64
+          rm -f ~/gki/common/android/abi_gki_protected_exports_x86_64
+
+      - name: Disable default Build
+        run: |
+          sed -i 's/POST_DEFCONFIG_CMDS="check_defconfig"/#POST_DEFCONFIG_CMDS="check_defconfig"/g' ~/gki/common/build.config.gki
+
+      - name: Compell
+        run: |
+          cd ~/gki
+          echo "Building kernel version: $kernel_version"
+          SKIP_ABI_CHECKS=1 LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
+
+      - name: Show hook
+        if: always()
+        run: |
+          grep -i "kernelsu\|hook\|lost\|incompatible" ~/gki/build.log | head -40 || true
+
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: ~/gki/build.log
+          retention-days: 7
+
+      - name: Upload RAW kernel image
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: kernel-image-android12-5.10-ksu
+          path: |
+            ~/gki/out/android12-5.10/dist/Image
+            ~/gki/out/android12-5.10/dist/Image.gz
+          retention-days: 14
+
+      - name: Clone AnyKernel3
+        if: success()
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ~/AnyKernel3
+          rm -rf ~/AnyKernel3/.git
+
+      - name: Config anykernel.sh
+        if: success()
+        run: |
+          cd ~/AnyKernel3
+          cat > anykernel.sh << EOF
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+          ### AnyKernel setup
+          # global properties
+          properties() { '
+          kernel.string=GKI with KernelSU by nodsea
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; } # end properties
+
+          ### AnyKernel install
+          # boot shell variables
+          BLOCK=boot
+          IS_SLOT_DEVICE=auto
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          NO_MAGISK_CHECK=1
+
+          # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
+          . tools/ak3-core.sh;
+
+          kernel_version=$(cat /proc/version | awk -F '-' '{print $1}' | awk '{print $3}')
+          case $kernel_version in
+          5.1*) ksu_supported=true ;;
+          6.1*) ksu_supported=true ;;
+          6.6*) ksu_supported=true ;;
+          *) ksu_supported=false ;;
+          esac
+
+          ui_print " " "  -> GKI Kernel Supported: $ksu_supported"
+          $ksu_supported || abort "  -> Non-GKI device, abort."
+
+          # boot install
+          split_boot
+          if [ -f "split_img/ramdisk.cpio" ]; then
+          unpack_ramdisk
+          write_boot
+          else
+          flash_boot
+          fi
+
+          ui_print " "
+          ui_print "Testing build"
+          ui_print " "
+          EOF
+
+      - name: Copy Image to AK3
+        if: success()
+        run: |
+          cp ~/gki/out/android12-5.10/common/arch/arm64/boot/Image ~/AnyKernel3/Image
+
+      - name: Packaging AK3
+        if: success()
+        id: package
+        run: |
+          cd ~/AnyKernel3
+          ZIPNAME="KSU-android12-5.10-$(date +%Y%m%d-%H%M).zip"
+          zip -r9 "$ZIPNAME" . -x ".git*"
+          echo "zip_path=$HOME/AnyKernel3/$ZIPNAME" >> $GITHUB_OUTPUT
+          echo "zip_name=$ZIPNAME" >> $GITHUB_OUTPUT
+
+      - name: Upload PKG to Artfact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ${{ steps.package.outputs.zip_name }}
+          path: ${{ steps.package.outputs.zip_path }}
+          retention-days: 14
+
+      - name: Upload to Telegram
+        if: success()
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          CAPTION="DONE!!!(/≧▽≦)/
+          Kernel: android12-5.10 (${kernel_version})
+          Root: KernelSU
+          LTO: Thin
+          Device: GKI5.10
+          Commit: $(cd ~/gki/common && git rev-parse --short HEAD)
+          Date: $(date '+%Y-%m-%d %H:%M UTC')"
+
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" \
+            -F chat_id="${CHAT_ID}" \
+            -F document=@"${{ steps.package.outputs.zip_path }}" \
+            -F caption="${CAPTION}"
+
+      - name: If failure
+        if: failure()
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d text="You're fucked up, check the log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
