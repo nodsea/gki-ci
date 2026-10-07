@@ -209,7 +209,7 @@ jobs:
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           CAPTION="DONE!!!(/≧▽≦)/
-          Kernel: android12-5.10 (${kernel_version})
+          Kernel: android12-5.10 (${kernel_sublevel})
           Root: KernelSU
           LTO: Thin
           Device: GKI5.10
