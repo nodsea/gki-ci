@@ -189,7 +189,7 @@ jobs:
         id: package
         run: |
           cd ~/AnyKernel3
-          ZIPNAME="KSU-android12-5.10-$(date +%Y%m%d-%H%M).zip"
+          ZIPNAME="KSU-android12-5.10.${kernel_sublevel}-$(date +%Y%m%d-%H%M).zip"
           zip -r9 "$ZIPNAME" . -x ".git*"
           echo "zip_path=$HOME/AnyKernel3/$ZIPNAME" >> $GITHUB_OUTPUT
           echo "zip_name=$ZIPNAME" >> $GITHUB_OUTPUT
@@ -209,7 +209,7 @@ jobs:
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           CAPTION="DONE!!!(/≧▽≦)/
-          Kernel: android12-5.10 (${kernel_sublevel})
+          Kernel: android12-5.10
           Root: KernelSU
           LTO: Thin
           Device: GKI5.10
