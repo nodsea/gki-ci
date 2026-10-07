@@ -1,4 +1,4 @@
-name: GKI 5.10 Compeller w/ BakaSU
+name: GKI 5.10 Compeller w/BakaSU
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     steps:
-      - name: Maximize storage
+      - name: Cleaning some storage
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /opt/hostedtoolcache /usr/share/swift /usr/local/share/boost \
@@ -18,7 +18,7 @@ jobs:
           sudo apt-get clean
           df -h /
 
-      - name: Setup swap
+      - name: Making swap
         run: |
           sudo swapoff -a 2>/dev/null || true
           sudo rm -f /swapfile /mnt/swapfile 2>/dev/null || true
@@ -28,32 +28,32 @@ jobs:
           sudo swapon /mnt/swapfile
           free -h
 
-      - name: Install dependencies
+      - name: Prep some dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y git curl build-essential bc bison flex \
               libssl-dev libelf-dev python3 python3-pip \
               device-tree-compiler clang lld llvm
 
-      - name: Setup repo tool
+      - name: Setup repo
         run: |
           mkdir -p ~/bin
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
           chmod a+x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      - name: Configure git identity
+      - name: Configure git id
         run: |
-          git config --global user.email "ci@example.com"
-          git config --global user.name "CI Builder"
-
-      - name: Synco kernel repo
+          git config --global user.email "local@host"
+          git config --global user.name "localhost"
+          
+      - name: Sync GKI
         run: |
           mkdir -p ~/gki && cd ~/gki
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android12-5.10-lts --depth=1
           repo sync -j$(nproc) -c --no-tags --force-sync --optimized-fetch
 
-      - name: Show kernel ver.
+      - name: Showing ver.
         run: |
           cd ~/gki/common
           echo "=== Branch & HEAD commit ==="
@@ -66,7 +66,7 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -
           ls KernelSU/
 
-      - name: Show BakaSU hook/config requirements
+      - name: Show BakaSU hook
         run: |
           cd ~/gki/common
           echo "=== Hook check files (jika ada) ==="
@@ -74,7 +74,7 @@ jobs:
           echo "=== Kconfig entries terkait KSU/TRACEPOINT/HOOK ==="
           find KernelSU -iname "Kconfig" -exec grep -n "^config KSU\|TRACEPOINT\|AUTO_HOOK\|HOOK" {} \; || true
 
-      - name: Enable kernel config
+      - name: Enable Kconfig
         run: |
           cat >> ~/gki/common/arch/arm64/configs/gki_defconfig << 'EOF'
           CONFIG_KSU=y
@@ -86,39 +86,11 @@ jobs:
           rm -f ~/gki/common/android/abi_gki_protected_exports_aarch64
           rm -f ~/gki/common/android/abi_gki_protected_exports_x86_64
 
-      - name: Disable Build default value
+      - name: Disable default Build
         run: |
           sed -i 's/POST_DEFCONFIG_CMDS="check_defconfig"/#POST_DEFCONFIG_CMDS="check_defconfig"/g' ~/gki/common/build.config.gki
 
-      - name: Normalize defconfig
-        run: |
-          cd ~/gki/common
-          make LLVM=1 LLVM_IAS=1 ARCH=arm64 O=out gki_defconfig
-          make LLVM=1 LLVM_IAS=1 ARCH=arm64 O=out savedefconfig
-          cp out/defconfig arch/arm64/configs/gki_defconfig
-          rm -rf out
-
-      - name: Verify kernel version before build
-        run: |
-          cd ~/gki/common
-          VERSION=$(grep -m1 "^VERSION = " Makefile | awk '{print $3}')
-          PATCHLEVEL=$(grep -m1 "^PATCHLEVEL = " Makefile | awk '{print $3}')
-          SUBLEVEL=$(grep -m1 "^SUBLEVEL = " Makefile | awk '{print $3}')
-          EXTRAVERSION=$(grep -m1 "^EXTRAVERSION = " Makefile | awk '{print $3}')
-          FULL_VERSION="${VERSION}.${PATCHLEVEL}.${SUBLEVEL}${EXTRAVERSION}"
-          echo "Kernel version yang akan di-compile: $FULL_VERSION"
-          echo "kernel_version=$FULL_VERSION" >> $GITHUB_ENV
-
-          if [ -z "$VERSION" ] || [ -z "$PATCHLEVEL" ] || [ -z "$SUBLEVEL" ]; then
-            echo "::error::Gagal membaca versi kernel dari Makefile — source kemungkinan tidak lengkap/corrupt."
-            exit 1
-          fi
-
-          if [ "$PATCHLEVEL" != "10" ]; then
-            echo "::warning::PATCHLEVEL terbaca $PATCHLEVEL, bukan 10 — pastikan branch yang di-sync memang android12-5.10-lts."
-          fi
-
-      - name: Build kernel
+      - name: Compell
         run: |
           cd ~/gki
           echo "Building kernel version: $kernel_version"
@@ -137,22 +109,23 @@ jobs:
           path: ~/gki/build.log
           retention-days: 7
 
-      - name: Upload kernel image
+      - name: Upload RAW kernel image
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: kernel-image-android12-5.10-bakasu
+          name: kernel-image-android12-5.10-ksu
           path: |
-            ~/gki/out/android12-5.10/common/arch/arm64/boot/Image
+            ~/gki/out/android12-5.10/dist/Image
+            ~/gki/out/android12-5.10/dist/Image.gz
           retention-days: 14
-      # ===================== BUNDLING ANYKERNEL3 =====================
-      - name: Clone AnyKernel3 template
+
+      - name: Clone AnyKernel3
         if: success()
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ~/AnyKernel3
           rm -rf ~/AnyKernel3/.git
 
-      - name: Configure anykernel.sh
+      - name: Config anykernel.sh
         if: success()
         run: |
           cd ~/AnyKernel3
@@ -184,7 +157,7 @@ jobs:
           IS_SLOT_DEVICE=auto
           RAMDISK_COMPRESSION=auto;
           PATCH_VBMETA_FLAG=auto;
-          NO_MAGSIK_CHECK=1
+          NO_MAGISK_CHECK=1
 
           # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
           . tools/ak3-core.sh;
@@ -211,34 +184,31 @@ jobs:
 
           ui_print " "
           ui_print "Testing build"
-          ui_print "Who's gonna tell it"
           ui_print " "
           EOF
 
-      - name: Copy kernel image into AnyKernel3
+      - name: Copy Image to AK3
         if: success()
         run: |
           cp ~/gki/out/android12-5.10/common/arch/arm64/boot/Image ~/AnyKernel3/Image
 
-      - name: Package AnyKernel3 zip
+      - name: Packaging AK3
         if: success()
         id: package
         run: |
           cd ~/AnyKernel3
-          ZIPNAME="BakaSU-android12-5.10-$(date +%Y%m%d-%H%M).zip"
+          ZIPNAME="BakaSU-android12-5.10.${kernel_sublevel}-$(date +%Y%m%d-%H%M).zip"
           zip -r9 "$ZIPNAME" . -x ".git*"
           echo "zip_path=$HOME/AnyKernel3/$ZIPNAME" >> $GITHUB_OUTPUT
           echo "zip_name=$ZIPNAME" >> $GITHUB_OUTPUT
 
-      - name: Upload AnyKernel3 zip as artifact
+      - name: Upload PKG to Artfact
         uses: actions/upload-artifact@v4
         if: success()
         with:
           name: ${{ steps.package.outputs.zip_name }}
           path: ${{ steps.package.outputs.zip_path }}
           retention-days: 14
-
-      # ===================== UPLOAD KE TELEGRAM =====================
 
       - name: Upload to Telegram
         if: success()
@@ -247,8 +217,9 @@ jobs:
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           CAPTION="DONE!!!(/≧▽≦)/
-          Kernel: android12-5.10 (${kernel_version})
-          Root: BakaSU (Tracepoint hook)
+          Kernel: android12-5.10
+          Root: BakaSU
+          LTO: Thin
           Device: GKI5.10
           Commit: $(cd ~/gki/common && git rev-parse --short HEAD)
           Date: $(date '+%Y-%m-%d %H:%M UTC')"
@@ -258,7 +229,7 @@ jobs:
             -F document=@"${{ steps.package.outputs.zip_path }}" \
             -F caption="${CAPTION}"
 
-      - name: Notify Telegram on failure
+      - name: If failure
         if: failure()
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -267,4 +238,3 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
             -d text="You're fucked up, check the log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
